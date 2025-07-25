@@ -1,0 +1,45 @@
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "wayback-analyzer"
+version = "0.1.0"
+description = "Advanced Wayback Machine analysis tool"
+authors = ["Your Name <your.email@example.com>"]
+packages = [{include = "wayback_analyzer", from = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+waybackpy = "^3.0.6"
+requests = "^2.31.0"
+pandas = "^2.0.0"
+click = "^8.1.0"
+python-dotenv = "^1.0.0"
+pydantic = "^2.0.0"
+urllib3 = "^1.26.18"
+beautifulsoup4 = "^4.13.4"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+black = "^23.7.0"
+isort = "^5.12.0"
+flake8 = "^6.0.0"
+mypy = "^1.5.0"
+
+
+[tool.poetry.scripts]
+wayback-analyzer = "wayback_analyzer.cli.main:main"
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
