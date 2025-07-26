@@ -1,0 +1,109 @@
+#!/bin/bash
+# Создание мастер-списка URL для любого сайта
+
+DOMAIN="$1"
+MIN_SIZE="${2:-5000}"  # Минимальный размер страницы
+
+if [ -z "$DOMAIN" ]; then
+    echo "Использование: $0 DOMAIN [MIN_SIZE]"
+    echo "Пример: $0 sluga-narodu.com 5000"
+    exit 1
+fi
+
+echo "🚀 Создание мастер-списка URL для $DOMAIN"
+echo "=============================================="
+echo "Минимальный размер страницы: $MIN_SIZE байт"
+echo ""
+
+# Шаг 1: Получение всех HTML URL
+echo "🔍 Шаг 1: Получение всех HTML URL..."
+curl -s "http://web.archive.org/cdx/search/cdx?url=${DOMAIN}/*&output=json&fl=original,timestamp,statuscode,mimetype,length&filter=mimetype:text/html&filter=statuscode:200&filter=length:>${MIN_SIZE}&collapse=original&limit=50000" > ${DOMAIN}_raw.json
+
+raw_count=$(($(jq length ${DOMAIN}_raw.json) - 1))
+echo "✅ Найдено уникальных HTML URL: $raw_count"
+
+if [ "$raw_count" -eq 0 ]; then
+    echo "❌ URL не найдены. Проверьте домен или уменьшите MIN_SIZE"
+    exit 1
+fi
+
+# Шаг 2: Фильтрация технических страниц
+echo ""
+echo "🧹 Шаг 2: Фильтрация технических страниц..."
+
+jq -r '
+if length > 1 then
+  .[1:] | map({
+    original: .[0],
+    timestamp: .[1],
+    statuscode: .[2],
+    mimetype: .[3],
+    size: (.[4] | tonumber? // 0)
+  }) | map(select(
+    # Основные фильтры
+    (.original | test("/wp-admin|/admin|/login|/auth|/dashboard") | not) and
+    (.original | test("/api/|/rest/|/json/|/xml/|/ajax") | not) and
+    (.original | test("/css/|/js/|/images/|/img/|/assets/|/static/|/media/") | not) and
+    (.original | test("/404|/error|/maintenance|/503") | not) and
+    (.original | test("robots\\.txt|sitemap\\.xml|\\.well-known/") | not) and
+    (.original | test("/search|/tag/|/category/|/archive") | not) and
+    (.original | test("\\?page=|\\?p=|/page/|\\?offset=") | not) and
+    (.original | test("/feed|/rss|/atom|/trackback|/xmlrpc") | not) and
+
+    # Расширения файлов
+    (.original | test("\\.(css|js|png|jpg|jpeg|gif|ico|pdf|zip|doc|docx|txt|xml)$") | not) and
+
+    # CMS специфичные пути
+    (.original | test("/wp-content|/wp-includes|/wp-json") | not) and
+    (.original | test("/node_modules|/vendor|/.git") | not) and
+
+    # Служебные страницы
+    (.original | test("/debug|/test|/tmp|/temp") | not)
+  ))
+else
+  []
+end
+' ${DOMAIN}_raw.json > ${DOMAIN}_filtered.json
+
+filtered_count=$(jq length ${DOMAIN}_filtered.json)
+excluded_count=$((raw_count - filtered_count))
+
+echo "✅ После фильтрации: $filtered_count URL"
+echo "🗑️  Исключено технических: $excluded_count URL"
+
+# Шаг 3: Создание финального мастер-списка
+echo ""
+echo "📊 Шаг 3: Создание мастер-списка с метаданными..."
+
+jq '[.[] | {
+  original: .original,
+  first_archived: .timestamp,
+  size: .size,
+  priority_score: (
+    # Простой скор на основе размера и глубины URL
+    (.size / 1000) +
+    (50 - (((.original | split("/") | length) - 3) * 5))
+  )
+}] | sort_by(-.priority_score)' ${DOMAIN}_filtered.json > ${DOMAIN}_master_list.json
+
+# Результаты
+echo ""
+echo "✅ МАСТЕР-СПИСОК СОЗДАН!"
+echo "========================"
+echo "📊 Статистика:"
+echo "  Всего найдено URL: $raw_count"
+echo "  После фильтрации: $filtered_count"
+echo "  Исключено: $excluded_count"
+echo ""
+echo "📁 Файлы:"
+echo "  ${DOMAIN}_raw.json - все найденные URL"
+echo "  ${DOMAIN}_filtered.json - после фильтрации"
+echo "  ${DOMAIN}_master_list.json - финальный мастер-список"
+echo ""
+echo "🎯 ТОП-10 URL по приоритету:"
+jq -r '.[] | "\(.priority_score | floor)\t\(.original)"' ${DOMAIN}_master_list.json | head -10 | while IFS=$'\t' read score url; do
+    echo "  $score: $url"
+done
+
+echo ""
+echo "💡 Теперь используйте мастер-список для поиска снапшотов на любую дату!"
