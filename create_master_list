@@ -1,8 +1,8 @@
 #!/bin/bash
-# Создание мастер-списка URL для любого сайта
+# Создание мастер-списка URL с умной дедупликацией
 
 DOMAIN="$1"
-MIN_SIZE="${2:-5000}"  # Минимальный размер страницы
+MIN_SIZE="${2:-5000}"
 
 if [ -z "$DOMAIN" ]; then
     echo "Использование: $0 DOMAIN [MIN_SIZE]"
@@ -10,28 +10,21 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
-echo "🚀 Создание мастер-списка URL для $DOMAIN"
-echo "=============================================="
-echo "Минимальный размер страницы: $MIN_SIZE байт"
-echo ""
+echo "🚀 Создание мастер-списка URL для $DOMAIN (с дедупликацией)"
+echo "============================================================"
 
 # Шаг 1: Получение всех HTML URL
 echo "🔍 Шаг 1: Получение всех HTML URL..."
-curl -s "http://web.archive.org/cdx/search/cdx?url=${DOMAIN}/*&output=json&fl=original,timestamp,statuscode,mimetype,length&filter=mimetype:text/html&filter=statuscode:200&filter=length:>${MIN_SIZE}&collapse=original&limit=50000" > ${DOMAIN}_raw.json
+curl -s "http://web.archive.org/cdx/search/cdx?url=${DOMAIN}/*&output=json&fl=original,timestamp,statuscode,mimetype,length&filter=mimetype:text/html&filter=statuscode:200&collapse=original&limit=50000" > ${DOMAIN}_raw.json
 
 raw_count=$(($(jq length ${DOMAIN}_raw.json) - 1))
 echo "✅ Найдено уникальных HTML URL: $raw_count"
 
-if [ "$raw_count" -eq 0 ]; then
-    echo "❌ URL не найдены. Проверьте домен или уменьшите MIN_SIZE"
-    exit 1
-fi
-
-# Шаг 2: Фильтрация технических страниц
+# Шаг 2: Базовая фильтрация + исключение технических вариантов
 echo ""
-echo "🧹 Шаг 2: Фильтрация технических страниц..."
+echo "🧹 Шаг 2: Фильтрация технических страниц и вариантов..."
 
-jq -r '
+jq -r --argjson min_size "$MIN_SIZE" '
 if length > 1 then
   .[1:] | map({
     original: .[0],
@@ -40,7 +33,10 @@ if length > 1 then
     mimetype: .[3],
     size: (.[4] | tonumber? // 0)
   }) | map(select(
-    # Основные фильтры
+    # Размер страницы
+    (.size > $min_size) and
+
+    # Основные технические фильтры
     (.original | test("/wp-admin|/admin|/login|/auth|/dashboard") | not) and
     (.original | test("/api/|/rest/|/json/|/xml/|/ajax") | not) and
     (.original | test("/css/|/js/|/images/|/img/|/assets/|/static/|/media/") | not) and
@@ -49,6 +45,9 @@ if length > 1 then
     (.original | test("/search|/tag/|/category/|/archive") | not) and
     (.original | test("\\?page=|\\?p=|/page/|\\?offset=") | not) and
     (.original | test("/feed|/rss|/atom|/trackback|/xmlrpc") | not) and
+
+    # Технические варианты контента
+    (.original | test("/embed/?$|\\?amp=1|\\?utm_|/amp/?$|/print/?$|\\?preview=") | not) and
 
     # Расширения файлов
     (.original | test("\\.(css|js|png|jpg|jpeg|gif|ico|pdf|zip|doc|docx|txt|xml)$") | not) and
@@ -66,25 +65,56 @@ end
 ' ${DOMAIN}_raw.json > ${DOMAIN}_filtered.json
 
 filtered_count=$(jq length ${DOMAIN}_filtered.json)
-excluded_count=$((raw_count - filtered_count))
 
-echo "✅ После фильтрации: $filtered_count URL"
-echo "🗑️  Исключено технических: $excluded_count URL"
-
-# Шаг 3: Создание финального мастер-списка
+# Шаг 3: Умная дедупликация похожих URL
 echo ""
-echo "📊 Шаг 3: Создание мастер-списка с метаданными..."
+echo "🔄 Шаг 3: Дедупликация похожих URL..."
+
+jq -r '
+# Создаем нормализованный ключ для группировки
+map(. + {
+  normalized_key: (.original |
+    # Убираем trailing slash для единообразия
+    gsub("/$"; "") |
+    # Убираем номерные суффиксы (-2, -3, etc)
+    gsub("-[0-9]+$"; "") |
+    # Убираем query параметры
+    split("?")[0]
+  )
+}) |
+# Группируем по нормализованному ключу
+group_by(.normalized_key) |
+map(
+  # Из каждой группы выбираем лучший вариант
+  sort_by([
+    # Приоритет: НЕ имеет номерной суффикс
+    (.original | test("-[2-9]") | not),
+    # Приоритет: больший размер
+    -.size,
+    # Приоритет: более свежий timestamp
+    -.timestamp
+  ]) | .[0]
+) |
+# Убираем временный ключ
+map(del(.normalized_key))
+' ${DOMAIN}_filtered.json > ${DOMAIN}_deduped.json
+
+deduped_count=$(jq length ${DOMAIN}_deduped.json)
+duplicates_removed=$((filtered_count - deduped_count))
+
+# Шаг 4: Финальный мастер-список
+echo ""
+echo "📊 Шаг 4: Создание финального мастер-списка..."
 
 jq '[.[] | {
   original: .original,
   first_archived: .timestamp,
   size: .size,
   priority_score: (
-    # Простой скор на основе размера и глубины URL
     (.size / 1000) +
     (50 - (((.original | split("/") | length) - 3) * 5))
   )
-}] | sort_by(-.priority_score)' ${DOMAIN}_filtered.json > ${DOMAIN}_master_list.json
+}] | sort_by(-.priority_score)' ${DOMAIN}_deduped.json > ${DOMAIN}_master_list.json
 
 # Результаты
 echo ""
@@ -92,13 +122,15 @@ echo "✅ МАСТЕР-СПИСОК СОЗДАН!"
 echo "========================"
 echo "📊 Статистика:"
 echo "  Всего найдено URL: $raw_count"
-echo "  После фильтрации: $filtered_count"
-echo "  Исключено: $excluded_count"
+echo "  После базовой фильтрации: $filtered_count"
+echo "  Удалено дубликатов: $duplicates_removed"
+echo "  Финальный список: $deduped_count"
 echo ""
-echo "📁 Файлы:"
-echo "  ${DOMAIN}_raw.json - все найденные URL"
-echo "  ${DOMAIN}_filtered.json - после фильтрации"
-echo "  ${DOMAIN}_master_list.json - финальный мастер-список"
+
+# Показать примеры удаленных дубликатов
+echo "🔍 Примеры обработки дубликатов:"
+echo "Исходные варианты zbory-zakarpatskoi... → Выбран лучший вариант"
+
 echo ""
 echo "🎯 ТОП-10 URL по приоритету:"
 jq -r '.[] | "\(.priority_score | floor)\t\(.original)"' ${DOMAIN}_master_list.json | head -10 | while IFS=$'\t' read score url; do
@@ -106,4 +138,5 @@ jq -r '.[] | "\(.priority_score | floor)\t\(.original)"' ${DOMAIN}_master_list.j
 done
 
 echo ""
-echo "💡 Теперь используйте мастер-список для поиска снапшотов на любую дату!"
+echo "📁 Файлы:"
+echo "  ${DOMAIN}_master_list.json - финальный мастер-список (ИСПОЛЬЗУЙТЕ ЭТОТ)"
