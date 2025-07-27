@@ -19,6 +19,8 @@ python-dotenv = "^1.0.0"
 pydantic = "^2.0.0"
 urllib3 = "^1.26.18"
 beautifulsoup4 = "^4.13.4"
+aiohttp = "^3.12.14"
+aiofiles = "^24.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

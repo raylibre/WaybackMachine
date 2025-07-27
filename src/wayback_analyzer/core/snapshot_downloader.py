@@ -55,7 +55,7 @@ class SnapshotDownloader:
         Args:
             domain: Доменное имя
             date: Дата в формате YYYYMMDD
-            snapshots: Список снапшотов из find_snapshots_for_date.sh
+            snapshots: Список снапшотов из find_snapshots_for_date_optimized.sh
 
         Returns:
             Статистика скачивания

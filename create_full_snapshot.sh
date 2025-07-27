@@ -116,10 +116,20 @@ if [ -f "$SNAPSHOTS_FILE" ]; then
         ./find_snapshots_for_date.sh "$DOMAIN" "$DATE"
     fi
 else
-    echo "🚀 Ищем снапшоты для даты $DATE..."
-    if ! ./find_snapshots_for_date.sh "$DOMAIN" "$DATE"; then
-        echo "❌ Ошибка при поиске снапшотов"
-        exit 1
+    # Выбираем оптимальную стратегию поиска
+    if [ "$MASTER_COUNT" -gt 1000 ]; then
+        echo "🚀 Большой сайт ($MASTER_COUNT URL) - используем ОПТИМИЗИРОВАННЫЙ поиск..."
+        if ! ./find_snapshots_for_date_optimized.sh "$DOMAIN" "$DATE"; then
+            echo "❌ Ошибка при оптимизированном поиске снапшотов"
+            exit 1
+        fi
+    else
+        echo "🚀 Обычный размер сайта - используем стандартный поиск..."
+        if ! ./find_snapshots_for_date.sh "$DOMAIN" "$DATE"; then
+            echo "❌ Ошибка при поиске снапшотов"
+            echo "💡 Попробуйте: ./find_snapshots_for_date_optimized.sh $DOMAIN $DATE"
+            exit 1
+        fi
     fi
 fi
 
